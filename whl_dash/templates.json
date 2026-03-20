@@ -1,0 +1,128 @@
+{
+  "control_feedback": {
+    "name": "control_feedback",
+    "rows": [
+      {
+        "title": "Speed + auto mode",
+        "signals": [
+          "chassis.speed_mps",
+          "chassis.driving_mode"
+        ]
+      },
+      {
+        "title": "Throttle",
+        "signals": [
+          "control.throttle",
+          "chassis.throttle_percentage"
+        ]
+      },
+      {
+        "title": "Brake",
+        "signals": [
+          "control.brake",
+          "chassis.brake_percentage"
+        ]
+      },
+      {
+        "title": "Steering",
+        "signals": [
+          "control.steering_target",
+          "chassis.steering_percentage"
+        ]
+      }
+    ]
+  },
+  "lat_control": {
+    "name": "lat_control",
+    "rows": [
+      {
+        "title": "Scenario",
+        "signals": [
+          "chassis.speed_mps",
+          "control.debug.simple_lat_debug.curvature"
+        ]
+      },
+      {
+        "title": "Core error",
+        "signals": [
+          "control.debug.simple_lat_debug.lateral_error",
+          "control.debug.simple_lat_debug.heading_error"
+        ]
+      },
+      {
+        "title": "Steering output",
+        "signals": [
+          "control.debug.simple_lat_debug.steer_angle",
+          "control.debug.simple_lat_debug.steer_angle_feedforward",
+          "control.debug.simple_lat_debug.steer_angle_feedback"
+        ]
+      },
+      {
+        "title": "Feedback attribution",
+        "signals": [
+          "control.debug.simple_lat_debug.steer_angle_lateral_contribution",
+          "control.debug.simple_lat_debug.steer_angle_heading_contribution"
+        ]
+      }
+    ]
+  },
+  "lon_control": {
+    "name": "lon_control",
+    "rows": [
+      {
+        "title": "Speed tracking",
+        "signals": [
+          "control.debug.simple_lon_debug.speed_reference",
+          "chassis.speed_mps"
+        ]
+      },
+      {
+        "title": "Acceleration cmd",
+        "signals": [
+          "control.debug.simple_lon_debug.acceleration_cmd",
+          "control.debug.simple_lon_debug.acceleration_lookup"
+        ]
+      },
+      {
+        "title": "Core errors",
+        "signals": [
+          "control.debug.simple_lon_debug.station_error",
+          "control.debug.simple_lon_debug.speed_error"
+        ]
+      },
+      {
+        "title": "Actuator",
+        "signals": [
+          "control.debug.simple_lon_debug.throttle_cmd",
+          "control.debug.simple_lon_debug.brake_cmd"
+        ]
+      }
+    ]
+  },
+  "pose_analysis": {
+    "name": "pose_analysis",
+    "rows": [
+      {
+        "title": "Position x,y",
+        "signals": [
+          "pose.pose.position.x",
+          "pose.pose.position.y"
+        ]
+      },
+      {
+        "title": "Heading",
+        "signals": [
+          "pose.pose.heading"
+        ]
+      },
+      {
+        "title": "Linear Velocity XYZ",
+        "signals": [
+          "pose.pose.linear_velocity.x",
+          "pose.pose.linear_velocity.y",
+          "np.sqrt(pose.pose.linear_velocity.x**2 + pose.pose.linear_velocity.y**2) * 3.6  # XY speed km/h"
+        ]
+      }
+    ]
+  }
+}
