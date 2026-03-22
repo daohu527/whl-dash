@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whl-dash"
+version = "0.1.0"
+description = "Browser-based data analysis dashboard for autonomous driving cyber records"
+readme = "README.md"
+authors = [
+  { name = "daohu527" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "dash>=2.0.0",
+    "plotly>=5.0.0",
+    "pandas>=1.3.0",
+    "numpy>=1.20.0",
+    "cyber_record>=0.1.4"
+]
+
+[project.scripts]
+whl-dash = "whl_dash.main:main"
+
+[tool.setuptools]
+packages = ["whl_dash"]
+include-package-data = true

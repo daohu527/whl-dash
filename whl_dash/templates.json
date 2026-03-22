@@ -1,37 +1,4 @@
 {
-  "control_feedback": {
-    "name": "control_feedback",
-    "rows": [
-      {
-        "title": "Speed + auto mode",
-        "signals": [
-          "chassis.speed_mps",
-          "chassis.driving_mode"
-        ]
-      },
-      {
-        "title": "Throttle",
-        "signals": [
-          "control.throttle",
-          "chassis.throttle_percentage"
-        ]
-      },
-      {
-        "title": "Brake",
-        "signals": [
-          "control.brake",
-          "chassis.brake_percentage"
-        ]
-      },
-      {
-        "title": "Steering",
-        "signals": [
-          "control.steering_target",
-          "chassis.steering_percentage"
-        ]
-      }
-    ]
-  },
   "lat_control": {
     "name": "lat_control",
     "rows": [
@@ -121,6 +88,39 @@
           "pose.pose.linear_velocity.x",
           "pose.pose.linear_velocity.y",
           "np.sqrt(pose.pose.linear_velocity.x**2 + pose.pose.linear_velocity.y**2) * 3.6  # XY speed km/h"
+        ]
+      }
+    ]
+  },
+  "control_feedback": {
+    "name": "control_feedback",
+    "rows": [
+      {
+        "title": "Speed + auto mode",
+        "signals": [
+          "chassis.speed_mps",
+          "chassis.driving_mode"
+        ]
+      },
+      {
+        "title": "Throttle",
+        "signals": [
+          "control.throttle",
+          "chassis.throttle_percentage"
+        ]
+      },
+      {
+        "title": "Brake",
+        "signals": [
+          "control.brake",
+          "chassis.brake_percentage"
+        ]
+      },
+      {
+        "title": "Steering",
+        "signals": [
+          "control.steering_target",
+          "chassis.steering_percentage"
         ]
       }
     ]

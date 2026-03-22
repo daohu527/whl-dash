@@ -1,0 +1,33 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Project generated files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data
+*.record
+*.record.*
+data/
+datasets/
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Tooling
+build/
+develop/
+dist/
+*.egg-info/
+.coverage
+htmlcov/

@@ -1,4 +1,23 @@
-import argparse
+#!/usr/bin/env python3
+
+# Copyright 2026 The WheelOS Team. All Rights Reserved.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Created Date: 2026-03-23
+# Author: daohu527
+
+
 import math
 import os
 import types
@@ -138,6 +157,32 @@ class RecordDataLoader:
             "math": math,
             "relative_time_sec": df["relative_time_sec"].values,
         }
+
+        # Custom analytical functions
+        def deriv(x):
+            if len(np.asarray(x)) < 2: return np.zeros_like(x)
+            return np.gradient(np.asarray(x), df["relative_time_sec"].values)
+
+        def smooth(x, window=10):
+            x_arr = np.asarray(x)
+            if len(x_arr) < window: return x_arr
+            kernel = np.ones(window)/window
+            return np.convolve(x_arr, kernel, mode='same')
+
+        def rad2deg(x):
+            return np.degrees(np.asarray(x))
+
+        def deg2rad(x):
+            return np.radians(np.asarray(x))
+
+        env["deriv"] = deriv
+        env["smooth"] = smooth
+        env["rad2deg"] = rad2deg
+        env["deg2rad"] = deg2rad
+        env["abs"] = np.abs
+        env["max"] = np.maximum
+        env["min"] = np.minimum
+
         tree = {}
 
         # Build nested dict from dot-separated columns
