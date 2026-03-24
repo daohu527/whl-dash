@@ -9,8 +9,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 
-from data import RecordDataLoader
-from template import TemplateManager, RowConfig, DashboardTemplate
+from whl_dash.data import RecordDataLoader
+from whl_dash.template import TemplateManager, RowConfig, DashboardTemplate
 
 # A simple cache to avoid continuously reloading the same record
 _LOADER_CACHE = {}

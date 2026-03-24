@@ -23,25 +23,18 @@ import sys
 import threading
 import webbrowser
 
-from dashboard import create_app
+from whl_dash.dashboard import create_app
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Apollo Universal Protobuf Formula Dashboard"
-    )
-    parser.add_argument(
-        "--record_path",
-        nargs="?",
-        default="",
-        help="Path to a .record file or directory with .record files",
-    )
+    parser = argparse.ArgumentParser(description="Apollo Universal Protobuf Formula Dashboard")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8050)
     args = parser.parse_args()
 
     try:
-        app = create_app(args.record_path)
+        # record path removed from CLI because the UI lets users pick workspace/records
+        app = create_app(None)
     except Exception as e:
         print(f"Failed to initialize dashboard: {e}")
         sys.exit(1)
