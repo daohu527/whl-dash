@@ -33,14 +33,14 @@ class RecordDataLoader:
 
     def __init__(self, record_path: str, topics: List[str] = None):
         self.record_path = os.path.abspath(record_path)
-        self.target_topics = topics or [
-            "/apollo/control",
-            "/apollo/canbus/chassis",
-            "/apollo/localization/pose",
-        ]
+        self.target_topics = topics
         self.master_df = pd.DataFrame()
         self.eval_env = {}
         self.available_signals = []
+        
+        # New components for Spatial Layers (Frames)
+        self.raw_frames = {}  # Dict[topic, List[Tuple[float, Any]]]
+        self.frame_eval_envs = {} # Cache environments if needed
         self._load()
 
     def _get_record_files(self, path: str) -> List[str]:
@@ -67,18 +67,9 @@ class RecordDataLoader:
             for field_desc, val in msg.ListFields():
                 key = f"{prefix}.{field_desc.name}" if prefix else field_desc.name
                 if field_desc.label == field_desc.LABEL_REPEATED:
-                    if field_desc.type == field_desc.TYPE_MESSAGE:
-                        if depth < max_depth:
-                            for i, item in enumerate(val):
-                                res.update(
-                                    self._flatten_msg(
-                                        item, f"{key}[{i}]", max_depth, depth + 1
-                                    )
-                                )
-                        else:
-                            res[key] = len(val)
-                    else:
-                        res[key] = len(val)
+                    # Never flatten repeated elements into thousands of columns for scalar plots.
+                    # It creates unmanageable pandas dataframes.
+                    res[key] = len(val)
                 elif field_desc.type == field_desc.TYPE_MESSAGE:
                     if depth < max_depth:
                         res.update(self._flatten_msg(val, key, max_depth, depth + 1))
@@ -94,10 +85,37 @@ class RecordDataLoader:
 
     def _load(self):
         rows_by_topic = {}
+        
+        # Auto-discover target topics if none provided
+        if not self.target_topics:
+            self.target_topics = []
+            files = self._get_record_files(self.record_path)
+            if files:
+                first_rec = Record(files[0])
+                try:
+                    channels = list(first_rec._reader.channels.keys())
+                except Exception:
+                    channels = []
+                
+                # For performance, only auto-collect core AD topics
+                core_topics = [
+                    '/apollo/localization/pose',
+                    '/apollo/control',
+                    '/apollo/canbus/chassis',
+                    '/apollo/planning',
+                    '/apollo/prediction',
+                    '/apollo/perception/obstacles',
+                    '/apollo/routing',
+                ]
+                for c in channels:
+                    if any(c.startswith(t) for t in core_topics):
+                        self.target_topics.append(c)
         record_files = self._get_record_files(self.record_path)
         for f in record_files:
             rec = Record(f)
             for topic, msg, t in rec.read_messages(self.target_topics):
+                if any(k in topic for k in ['/sensor/camera', '/sensor/lidar', 'pointcloud', 'image']):
+                    continue
                 alias = self._topic_alias(topic)
                 row = self._flatten_msg(msg)
 
@@ -113,9 +131,18 @@ class RecordDataLoader:
 
                 row["timestamp_sec"] = float(ts)
                 rows_by_topic.setdefault(alias, []).append(row)
+                
+                # Store raw message for Frame inspection
+                # Exclude pointclouds, images, radar, and large arrays to save RAM
+                if not any(k in topic for k in ['/sensor/camera', '/sensor/lidar', 'pointcloud', 'image']):
+                    self.raw_frames.setdefault(alias, []).append((float(ts), msg))
+
+        # Sort frames by time
+        for topic in self.raw_frames:
+            self.raw_frames[topic].sort(key=lambda x: x[0])
 
         if not rows_by_topic:
-            raise RuntimeError(f"No targeted messages found in {self.record_path}")
+            raise RuntimeError(f"No messages found in {self.record_path}")
 
         dfs = {}
         for topic, rows in rows_by_topic.items():
@@ -224,3 +251,79 @@ class RecordDataLoader:
         except Exception as e:
             print(f"Eval warning on '{expr}': {e}")
             return None
+
+    def get_spatial_frame(self, time_sec: float, layer_config) -> tuple:
+        """
+        Returns (x_list, y_list) for a given spatial layer config at the specified time.
+        Config has: layer_type ('track' or 'frame'), topic, array_base, x_expr, y_expr
+        """
+        if layer_config.layer_type == 'track':
+            # Fast path: extract from master_df using existing evaluate
+            x = self.evaluate(layer_config.x_expr)
+            y = self.evaluate(layer_config.y_expr)
+            if x is not None and y is not None:
+                # Decimate if needed, handled in dashboard
+                return x, y
+            return [], []
+            
+        elif layer_config.layer_type == 'frame':
+            alias = self._topic_alias(layer_config.topic)
+            frames = self.raw_frames.get(alias)
+            if not frames:
+                return [], []
+            
+            # Find the closest frame by time
+            import bisect
+            times = [f[0] for f in frames]
+            t_base = self.master_df['timestamp_sec'].iloc[0] if not self.master_df.empty else 0
+            abs_time = time_sec + t_base
+            
+            idx = bisect.bisect_left(times, abs_time)
+            if idx >= len(times):
+                idx = len(times) - 1
+            if idx > 0 and abs(times[idx-1] - abs_time) < abs(times[idx] - abs_time):
+                idx = idx - 1
+                
+            msg_dict = frames[idx][1]
+            
+            # Extract nested array
+            array_obj = msg_dict
+            if layer_config.array_base:
+                parts = layer_config.array_base.split('.')
+                for p in parts:
+                    if p:
+                        if hasattr(array_obj, p):
+                            array_obj = getattr(array_obj, p)
+                        elif isinstance(array_obj, dict):
+                            array_obj = array_obj.get(p, [])
+            
+            if not isinstance(array_obj, list):
+                if array_obj:  # Support scalar object
+                    array_obj = [array_obj]
+                else:
+                    return [], []
+                    
+            x_list, y_list = [], []
+            
+            def eval_item(item, expr):
+                if not expr: return 0.0
+                try:
+                    curr = item
+                    for p in expr.split('.'):
+                        if hasattr(curr, p):
+                            curr = getattr(curr, p)
+                        elif isinstance(curr, dict):
+                            curr = curr.get(p, 0.0)
+                        else:
+                            return 0.0
+                    return float(curr)
+                except Exception:
+                    return 0.0
+
+            for item in array_obj:
+                x_list.append(eval_item(item, layer_config.x_expr))
+                y_list.append(eval_item(item, layer_config.y_expr))
+                
+            return np.array(x_list), np.array(y_list)
+        
+        return [], []
