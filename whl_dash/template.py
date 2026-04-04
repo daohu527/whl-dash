@@ -20,9 +20,20 @@
 
 import json
 import os
-from dataclasses import dataclass, asdict
-from typing import List, Dict
+from dataclasses import dataclass, asdict, field
+from typing import List, Dict, Optional
 
+
+@dataclass
+class SpatialLayerConfig:
+    name: str = ""
+    layer_type: str = "track"
+    topic: str = ""
+    array_base: str = ""
+    x_expr: str = "position.x"
+    y_expr: str = "position.y"
+    mode: str = "markers"
+    color: str = "blue"
 
 @dataclass
 class RowConfig:
@@ -34,6 +45,7 @@ class RowConfig:
 class DashboardTemplate:
     name: str
     rows: List[RowConfig]
+    spatial_layers: List[SpatialLayerConfig] = field(default_factory=list)
 
 
 class TemplateManager:
@@ -59,7 +71,19 @@ class TemplateManager:
                         )
                         for r in v.get("rows", [])
                     ]
-                    self.templates[k] = DashboardTemplate(name=k, rows=rows)
+                    spatial_layers = []
+                    for s in v.get("spatial_layers", []):
+                        spatial_layers.append(SpatialLayerConfig(
+                            name=s.get("name", ""),
+                            layer_type=s.get("layer_type", "track"),
+                            topic=s.get("topic", ""),
+                            array_base=s.get("array_base", ""),
+                            x_expr=s.get("x_expr", "position.x"),
+                            y_expr=s.get("y_expr", "position.y"),
+                            mode=s.get("mode", "markers"),
+                            color=s.get("color", "blue")
+                        ))
+                    self.templates[k] = DashboardTemplate(name=k, rows=rows, spatial_layers=spatial_layers)
                 if "control_feedback" not in self.templates:
                     self._init_defaults()
                     self.save()
@@ -168,4 +192,7 @@ class TemplateManager:
                     ],
                 ),
             ],
+            spatial_layers=[
+                SpatialLayerConfig(name="Ego Track", layer_type="track", x_expr="pose.pose.position.x", y_expr="pose.pose.position.y", mode="lines", color="#1f77b4")
+            ]
         )

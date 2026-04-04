@@ -124,5 +124,48 @@
         ]
       }
     ]
+  },
+  "spatial_analysis": {
+    "name": "spatial_analysis",
+    "rows": [
+      {
+        "title": "Speed",
+        "signals": [
+          "chassis.speed_mps"
+        ]
+      }
+    ],
+    "spatial_layers": [
+      {
+        "name": "Ego Position",
+        "layer_type": "track",
+        "topic": "/apollo/localization/pose",
+        "array_base": "",
+        "x_expr": "pose.pose.position.x",
+        "y_expr": "pose.pose.position.y",
+        "mode": "lines",
+        "color": "blue"
+      },
+      {
+        "name": "Planned Trajectory",
+        "layer_type": "frame",
+        "topic": "/apollo/planning",
+        "array_base": "trajectory_point",
+        "x_expr": "path_point.x",
+        "y_expr": "path_point.y",
+        "mode": "lines",
+        "color": "green"
+      },
+      {
+        "name": "Perception Obstacles",
+        "layer_type": "frame",
+        "topic": "/apollo/prediction/perception_obstacles",
+        "array_base": "perception_obstacle",
+        "x_expr": "position.x",
+        "y_expr": "position.y",
+        "mode": "markers",
+        "color": "red"
+      }
+    ]
   }
 }

@@ -4,15 +4,14 @@ import os
 import dash
 import json
 import base64
-from dash import html, dcc, Input, Output, State, ALL, callback_context
+from dash import html, dcc, Input, Output, State, ALL, callback_context, Patch, no_update
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 
 from whl_dash.data import RecordDataLoader
-from whl_dash.template import TemplateManager, RowConfig, DashboardTemplate
+from whl_dash.template import TemplateManager, RowConfig, DashboardTemplate, SpatialLayerConfig
 
-# A simple cache to avoid continuously reloading the same record
 _LOADER_CACHE = {}
 
 def get_loader(record_path: str):
@@ -32,10 +31,8 @@ def get_available_records(base_dir="."):
     if not os.path.isdir(base_dir):
         return res
     try:
-        # Include current base_dir if it has records
         if any(".record" in f for f in os.listdir(base_dir)):
             res.append(base_dir)
-        # Scan immediate subdirectories
         for name in os.listdir(base_dir):
             path = os.path.join(base_dir, name)
             if os.path.isdir(path):
@@ -49,12 +46,7 @@ def get_available_records(base_dir="."):
     result_options = [{"label": os.path.basename(p) or p, "value": os.path.abspath(p)} for p in sorted(res)]
     return result_options
 
-
-# Helpers for performance
 def _decimate_series(t: np.ndarray, y: np.ndarray, max_points: int = 4000):
-    """Reduce series to at most `max_points` by picking evenly spaced indices.
-    Keeps endpoints. Returns (t_dec, y_dec).
-    """
     if t is None or y is None:
         return t, y
     n = len(t)
@@ -63,7 +55,6 @@ def _decimate_series(t: np.ndarray, y: np.ndarray, max_points: int = 4000):
     idx = np.linspace(0, n - 1, num=max_points, dtype=int)
     return t[idx], y[idx]
 
-# Reusable UI Styles (VS Code / Modern IDE theme)
 SECTION_HEADER_STYLE = {
     "fontSize": "11px", "fontWeight": "bold", "color": "#666",
     "textTransform": "uppercase", "marginBottom": "6px"
@@ -102,6 +93,7 @@ def create_app(initial_record_path: str):
     # UI LAYOUT
     app.layout = html.Div(
         [
+            dcc.Store(id="current-time-store", data=0),
             # Left Sidebar
             html.Div(
                 [
@@ -127,7 +119,7 @@ def create_app(initial_record_path: str):
                         ], style=PANEL_STYLE
                     ),
 
-                    # 2. Template Manager & Editor Panel
+                    # 2. Template Manager
                     html.Div(
                         [
                             html.Div(
@@ -142,41 +134,51 @@ def create_app(initial_record_path: str):
                                     )
                                 ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "baseline", "marginBottom": "8px"}
                             ),
-                            # Template Selector Row
                             html.Div(
                                 [
-                                    dcc.Dropdown(id="tpl-dropdown", options=get_template_options(), value="control_feedback", clearable=False, style={"flex": "1", "fontSize": "12px", "minWidth": "0"}),
+                                    dcc.Dropdown(id="tpl-dropdown", options=get_template_options(), value="pose_analysis", clearable=False, style={"flex": "1", "fontSize": "12px", "minWidth": "0"}),
                                     html.Button("💾", id="btn-save", title="Save Template", style=ICON_BTN_STYLE),
                                     html.Button("🗑", id="btn-delete", title="Delete Template", style={"color": "red", **ICON_BTN_STYLE}),
                                 ], style={"display": "flex", "alignItems": "center", "marginBottom": "15px", "gap": "4px"}
                             ),
 
-                            # Segmented Control for Mode
                             dcc.RadioItems(
                                 id="editor-mode",
                                 options=[
-                                    {"label": html.Span(["👁", html.Span(" Visual UI", style={"marginLeft":"4px"})], style={"display":"flex", "alignItems":"center"}), "value": "visual"},
-                                    {"label": html.Span(["📝", html.Span(" Raw JSON", style={"marginLeft":"4px"})], style={"display":"flex", "alignItems":"center"}), "value": "raw"}
+                                    {"label": "👁 Visual UI", "value": "visual"},
+                                    {"label": "📝 Raw JSON", "value": "raw"}
                                 ],
-                                value="visual",
-                                inline=True,
+                                value="visual", inline=True,
                                 style={"fontSize": "12px", "display": "flex", "gap": "15px", "borderBottom": "1px solid #eee", "paddingBottom": "10px", "marginBottom": "10px"}
                             ),
-
                             html.Div(id="json-status-msg", style={"fontSize": "11px", "marginBottom": "10px"}),
 
-                            # Visual Editor Container
                             html.Div(
                                 id="visual-editor",
                                 children=[
+                                    dcc.Tabs([
+                                        dcc.Tab(label="Time Series", children=[
+                                            html.Div(
+                                                [
+                                                    html.Button("➕ Add Chart Row", id="btn-add-row", style={"fontSize": "11px", "padding": "4px 8px", "cursor": "pointer"}),
+                                                ], style={"display": "flex", "justifyContent": "flex-start", "margin": "10px 0"}
+                                            ),
+                                            html.Div(id="rows-container")
+                                        ]),
+                                        dcc.Tab(label="2D Spatial Layers", children=[
+                                            html.Div(
+                                                [
+                                                    html.Button("➕ Blank Layer", id="btn-add-spatial", style={"fontSize": "11px", "padding": "4px 8px", "cursor": "pointer"}),
+                                                    html.Button("🛣️ Planning Trajectory", id="btn-add-planning", style={"fontSize": "11px", "padding": "4px 8px", "cursor": "pointer", "marginLeft": "5px"}),
+                                                    html.Button("📦 Perception Obstacles", id="btn-add-perception", style={"fontSize": "11px", "padding": "4px 8px", "cursor": "pointer", "marginLeft": "5px"}),
+                                                ], style={"display": "flex", "justifyContent": "flex-start", "margin": "10px 0"}
+                                            ),
+                                            html.Div(id="spatial-container")
+                                        ])
+                                    ], style={"fontSize": "12px"}),
                                     html.Div(
-                                        [
-                                            html.Button("➕ Add Chart Row", id="btn-add-row", style={"fontSize": "11px", "padding": "4px 8px", "cursor": "pointer"}),
-                                            html.Button("▶ Render Canvas", id="btn-render", style={"background": "#28a745", "color": "white", "border": "none", "borderRadius": "3px", "fontWeight": "bold", "fontSize": "11px", "padding": "4px 10px", "cursor": "pointer"}),
-                                        ],
-                                        style={"display": "flex", "justifyContent": "space-between", "marginBottom": "10px"}
-                                    ),
-                                    html.Div(id="rows-container")
+                                        html.Button("▶ Render Dashboard", id="btn-render", style={"width": "100%", "background": "#28a745", "color": "white", "border": "none", "borderRadius": "3px", "fontWeight": "bold", "fontSize": "12px", "padding": "8px", "marginTop": "15px", "cursor": "pointer"}),
+                                    )
                                 ],
                                 style={"display": "block"}
                             ),
@@ -210,7 +212,6 @@ def create_app(initial_record_path: str):
                         ],
                         style=PANEL_STYLE
                     )
-
                 ],
                 style={
                     "width": "420px", "padding": "20px 15px", "borderRight": "1px solid #dce0e4",
@@ -218,63 +219,70 @@ def create_app(initial_record_path: str):
                     "background": "#f6f8fb", "boxSizing": "border-box", "fontFamily": "system-ui, -apple-system, sans-serif"
                 },
             ),
-            # Main Content Graph (Split: Top Map, Bottom Charts)
+            # Main Content
             html.Div(
-                [
-                    html.Div([
-                        html.Button(
-                            "🗺️ Hide Map", id="btn-toggle-map",
-                            style={
-                                "position": "absolute", "top": "10px", "right": "16px", "zIndex": "1000",
-                                "padding": "4px 8px", "fontSize": "12px", "cursor": "pointer",
-                                "fontWeight": "bold", "color": "#444",
-                                "background": "white", "border": "1px solid #ccc", "borderRadius": "4px", "boxShadow": "0 1px 3px rgba(0,0,0,0.1)"
-                            }
-                        ),
-                        html.Div(id="map-container", children=[
-                            dcc.Graph(
-                                id="map-graph",
-                                style={"height": "100%", "width": "100%"},
-                                config={
-                                    "scrollZoom": True,
-                                    "displaylogo": False,
-                                    "doubleClick": "reset",
-                                    "responsive": True
-                                }
-                            )
-                        ], style={"height": f"{map_panel_height_px}px", "borderBottom": "2px solid #eee", "backgroundColor": "#fafafa", "flexShrink": "0"})
-                    ], style={"position": "relative", "flexShrink": "0"}),
+                id="main-workspace-content",
+                children=[
+                    # Top: Spatial 2D Map & Playback
+                    html.Div(
+                        id="map-pane-wrapper",
+                        children=[
+                            html.Div([
+                                html.Button("▶ Play", id="btn-play", style={"marginRight": "8px", "cursor": "pointer", "padding": "4px 12px", "fontWeight": "bold"}),
+                                html.Div(dcc.Slider(id="time-slider", min=0, max=100, step=0.1, value=0, marks=None, tooltip={"placement": "bottom", "always_visible": True}), style={"flex": "1"}),
+                                dcc.Interval(id="play-interval", interval=100, disabled=True)
+                            ], style={"display": "flex", "alignItems": "center", "padding": "10px 40px 10px 10px", "background": "#fafafa", "borderBottom": "1px solid #ddd"}),
 
-                    html.Div([
+                            html.Div(id="map-container", children=[
+                                dcc.Graph(
+                                    id="map-graph",
+                                    style={"height": "100%", "width": "100%"},
+                                    config={"scrollZoom": True, "displaylogo": False, "doubleClick": "reset"}
+                                )
+                            ], style={"height": f"{map_panel_height_px - 40}px", "borderBottom": "2px solid #eee", "backgroundColor": "#fafafa", "resize": "vertical", "overflow": "auto", "minHeight": "150px"})
+                        ]
+                    ),
+
+                    # Bottom: Time Series Charts
+                    html.Div(
+                        id="charts-pane-wrapper",
+                        children=[
                         html.Div(
                             [
                                 html.Label("Chart Layout Mode: ", style={"fontSize": "11px", "fontWeight": "bold", "marginRight": "8px"}),
                                 dcc.RadioItems(
+                                    id="pane-layout-mode",
+                                    options=[
+                                        {"label": " ↕ Split Vertically", "value": "vertical"},
+                                        {"label": " ↔ Split Horizontally", "value": "horizontal"},
+                                        {"label": " 🗺 Map Only", "value": "map-only"},
+                                        {"label": " 📈 Charts Only", "value": "charts-only"}
+                                    ],
+                                    value="vertical", inline=True, style={"fontSize": "11px", "display": "inline-block", "marginRight": "15px", "paddingRight":"15px", "borderRight":"1px solid #ccc"}
+                                ),
+                                dcc.RadioItems(
                                     id="chart-layout-mode",
                                     options=[
-                                        {"label": " Scrollable Details (Fixed Height)", "value": "scroll"},
-                                        {"label": " Fit to Screen (Compare All)", "value": "fit"}
+                                        {"label": " Scrollable Charts", "value": "scroll"},
+                                        {"label": " Fit Charts", "value": "fit"}
                                     ],
-                                    value="scroll",
-                                    inline=True,
-                                    style={"fontSize": "11px", "display": "inline-block"}
+                                    value="scroll", inline=True, style={"fontSize": "11px", "display": "inline-block"}
                                 )
-                            ], style={"padding": "5px 20px", "backgroundColor": "#f8f9fa", "borderBottom": "1px solid #ddd", "display": "flex", "alignItems": "center"}
+                            ], style={"padding": "5px 20px", "backgroundColor": "#f8f9fa", "borderBottom": "1px solid #ddd"}
                         ),
                         html.Div(
                             id="graph-container",
-                            style={"flex": "1", "display": "flex", "flexDirection": "column", "overflowY": "hidden", "minHeight": "0"},
+                            style={"flex": "1", "display": "flex", "flexDirection": "column", "overflowY": "auto", "minHeight": "0"},
                             children=[
                                 dcc.Loading(
                                     id="loading-graph", type="circle",
-                                    style={"height": "100%"},
                                     children=[
-                                        dcc.Graph(id="main-graph", style={"width": "100%", "height": "100%", "minHeight": "0"})
+                                        dcc.Graph(id="main-graph", style={"width": "100%", "minHeight": "400px"})
                                     ]
                                 )
                             ]
                         )
-                    ], style={"flex": "1", "display": "flex", "flexDirection": "column", "minHeight": "0"})
+                    ], style={"flex": "1", "display": "flex", "flexDirection": "column", "minHeight": "0", "overflow": "auto"})
                 ],
                 style={"flex": "1", "padding": "0px", "overflow": "hidden", "background": "white", "display": "flex", "flexDirection": "column"},
             ),
@@ -282,25 +290,7 @@ def create_app(initial_record_path: str):
         style={"display": "flex", "height": "100vh", "margin": "-8px"},
     )
 
-    # ---------------- CALLBACKS ---------------- #
-
-    @app.callback(
-        Output("map-container", "style"),
-        Output("btn-toggle-map", "children"),
-        Input("btn-toggle-map", "n_clicks"),
-    )
-    def toggle_map_panel(n_clicks):
-        is_hidden = bool(n_clicks and n_clicks % 2 == 1)
-        if is_hidden:
-            return {"display": "none"}, "🗺️ Show Map"
-        return {
-            "height": f"{map_panel_height_px}px",
-            "borderBottom": "2px solid #eee",
-            "backgroundColor": "#fafafa",
-            "flexShrink": "0"
-        }, "🗺️ Hide Map"
-
-    # 1. Workspace Scanner
+    # Callbacks
     @app.callback(
         Output("record-dropdown", "options"),
         Output("record-dropdown", "value", allow_duplicate=True),
@@ -310,10 +300,8 @@ def create_app(initial_record_path: str):
     )
     def scan_workspace(n_clicks, path):
         opts = get_available_records(path)
-        val = opts[0]["value"] if opts else None
-        return opts, val
+        return opts, opts[0]["value"] if opts else None
 
-    # 2. View Toggle
     @app.callback(
         Output("visual-editor", "style"),
         Output("raw-editor", "style"),
@@ -324,59 +312,33 @@ def create_app(initial_record_path: str):
             return {"display": "block"}, {"display": "none"}
         return {"display": "none"}, {"display": "flex", "flexDirection": "column"}
 
-    # 3. Export Logic
-    @app.callback(
-        Output("download-template", "data"),
-        Input("btn-export", "n_clicks"),
-        prevent_initial_call=True
-    )
-    def export_templates(n_clicks):
-        try:
-            with open(mgr.path, "r", encoding="utf-8") as f:
-                content = f.read()
-            return dcc.send_string(content, "apollo_dash_templates.json")
-        except Exception as e:
-            return dash.no_update
-
-    # 4. Signals Glossary updates when record changes
-    @app.callback(
-        Output("signals-list-container", "children"),
-        Output("signals-details", "children"),
-        Input("record-dropdown", "value")
-    )
-    def update_signals_list(record_paths):
-        if not record_paths:
-            return html.Div("No record selected", style={"color": "#999", "fontSize": "11px"}), dash.no_update
-
-        record_path = record_paths[0] if isinstance(record_paths, list) else record_paths
-        loader = get_loader(record_path)
-        if not loader:
-            return html.Div("Failed to load record or no signals found", style={"color": "red", "fontSize": "11px"}), dash.no_update
-
-        roots = [k for k in loader.eval_env.keys() if k not in ("np", "math", "relative_time_sec")]
-
-        content = html.Div([
-            html.Div("Variables: " + ", ".join(roots) + " | Globals: np, math", style={"fontSize": "10px", "marginBottom": "8px", "color": "#0056b3"}),
-            html.Pre(
-                "\n".join(loader.available_signals),
-                style={"height": "200px", "overflowY": "scroll", "fontSize": "11px", "background": "#fff", "border": "1px solid #ddd", "padding": "8px", "borderRadius": "4px"}
-            )
-        ])
-        summary = [html.Summary(f"Available Signals ({len(loader.available_signals)})", style={"cursor": "pointer", **SECTION_HEADER_STYLE}), content]
-        return content, summary
-
-    # Helper: read UI Visual Rows
     def get_current_rows(titles, signals):
-        current_rows = []
-        if titles is not None and signals is not None:
+        res = []
+        if titles and signals:
             for t, s in zip(titles, signals):
                 sig_list = [x.strip() for x in (s or "").replace(",", "\n").split("\n") if x.strip() and not x.strip().startswith("#")]
-                current_rows.append(RowConfig(title=(t or "Row"), signals=sig_list))
-        return current_rows
+                res.append(RowConfig(title=(t or "Row"), signals=sig_list))
+        return res
 
-    # 5. Core Engine: Manage Template UI States (Visual vs JSON vs Import)
+    def get_current_spatials(s_names, s_types, s_topics, s_bases, s_xs, s_ys, s_modes, s_colors):
+        res = []
+        if s_names is not None:
+            for i in range(len(s_names)):
+                res.append(SpatialLayerConfig(
+                    name=s_names[i] or "",
+                    layer_type=s_types[i] if s_types and len(s_types)>i else "track",
+                    topic=s_topics[i] if s_topics and len(s_topics)>i else "",
+                    array_base=s_bases[i] if s_bases and len(s_bases)>i else "",
+                    x_expr=s_xs[i] if s_xs and len(s_xs)>i else "",
+                    y_expr=s_ys[i] if s_ys and len(s_ys)>i else "",
+                    mode=s_modes[i] if s_modes and len(s_modes)>i else "markers",
+                    color=s_colors[i] if s_colors and len(s_colors)>i else "blue",
+                ))
+        return res
+
     @app.callback(
         Output("rows-container", "children"),
+        Output("spatial-container", "children"),
         Output("tpl-dropdown", "options"),
         Output("tpl-dropdown", "value"),
         Output("raw-json-editor", "value"),
@@ -385,384 +347,328 @@ def create_app(initial_record_path: str):
         Input("btn-save", "n_clicks"),
         Input("btn-delete", "n_clicks"),
         Input("btn-add-row", "n_clicks"),
-        Input({"type": "btn-rem", "index": ALL}, "n_clicks"),
+        Input("btn-add-spatial", "n_clicks"),
+        Input("btn-add-planning", "n_clicks"),
+        Input("btn-add-perception", "n_clicks"),
+        Input({"type": "btn-rem-row", "index": ALL}, "n_clicks"),
+        Input({"type": "btn-rem-spatial", "index": ALL}, "n_clicks"),
         Input("btn-save-json", "n_clicks"),
-        Input("upload-template", "contents"),
         State("raw-json-editor", "value"),
         State({"type": "title-in", "index": ALL}, "value"),
         State({"type": "signals-in", "index": ALL}, "value"),
-        State("tpl-dropdown", "value"),
+        State({"type": "sl-name", "index": ALL}, "value"),
+        State({"type": "sl-type", "index": ALL}, "value"),
+        State({"type": "sl-topic", "index": ALL}, "value"),
+        State({"type": "sl-base", "index": ALL}, "value"),
+        State({"type": "sl-x", "index": ALL}, "value"),
+        State({"type": "sl-y", "index": ALL}, "value"),
+        State({"type": "sl-mode", "index": ALL}, "value"),
+        State({"type": "sl-color", "index": ALL}, "value"),
+        State("tpl-dropdown", "value")
     )
     def handle_ui_state(
-        sel_tpl, save_c, del_c, add_c, rem_c, save_json_c, upload_contents,
-        json_val, titles, signals, current_tpl_dropdown_val
+        sel_tpl, save_c, del_c, add_r, add_s, add_plan, add_percep, rem_r, rem_s, save_json,
+        json_val, titles, signals,
+        s_names, s_types, s_topics, s_bases, s_xs, s_ys, s_modes, s_colors,
+        current_tpl_dropdown_val
     ):
         ctx = callback_context
-        trig = ctx.triggered_id if ctx.triggered else "init"
+        # Robust trigger detection: support normal ids and pattern-matching ids
+        trig = "init"
+        try:
+            tlist = ctx.triggered
+            if tlist:
+                prop = tlist[0].get("prop_id", "")
+                if prop:
+                    pid = prop.split('.')[0]
+                    try:
+                        trig = json.loads(pid)
+                    except Exception:
+                        trig = pid
+        except Exception:
+            trig = "init"
 
-        # Note: input string from trigger replaces 'sel_tpl' during its trigger.
-        # But 'current_tpl_dropdown_val' is stable.
-        active_tpl = sel_tpl if trig == "tpl-dropdown" else current_tpl_dropdown_val
+        # Decide active template: if the tpl-dropdown triggered, use sel_tpl, otherwise keep previous
+        if isinstance(trig, str) and trig == "tpl-dropdown":
+            active_tpl = sel_tpl
+        else:
+            active_tpl = current_tpl_dropdown_val
 
         current_rows = get_current_rows(titles, signals)
+        current_spatials = get_current_spatials(s_names, s_types, s_topics, s_bases, s_xs, s_ys, s_modes, s_colors)
+
         out_sel = active_tpl
         new_rows = current_rows
+        new_spatials = current_spatials
         status_msg = ""
 
         try:
-            # Handle JSON Save
             if trig == "btn-save-json":
                 data = json.loads(json_val)
                 mgr.templates.clear()
                 for k, v in data.items():
                     r_cfgs = [RowConfig(title=r.get("title", ""), signals=r.get("signals", [])) for r in v.get("rows", [])]
-                    mgr.templates[k] = DashboardTemplate(name=k, rows=r_cfgs)
+                    s_cfgs = [SpatialLayerConfig(**s) for s in v.get("spatial_layers", [])]
+                    mgr.templates[k] = DashboardTemplate(name=k, rows=r_cfgs, spatial_layers=s_cfgs)
                 mgr.save()
-                status_msg = html.Span("✅ Config applied and saved!", style={"color": "green"})
+                status_msg = html.Span("✅ Config saved!", style={"color": "green"})
                 if active_tpl not in mgr.templates and mgr.templates:
                     out_sel = list(mgr.templates.keys())[0]
                 new_rows = mgr.templates.get(out_sel, DashboardTemplate("", [])).rows
+                new_spatials = mgr.templates.get(out_sel, DashboardTemplate("", [])).spatial_layers
 
-            # Handle JSON Upload
-            elif trig == "upload-template" and upload_contents:
-                content_type, content_string = upload_contents.split(',')
-                decoded = base64.b64decode(content_string).decode('utf-8')
-                data = json.loads(decoded)
-                # Overwrite or merge? We overwrite entirely for consistency
-                mgr.templates.clear()
-                for k, v in data.items():
-                    r_cfgs = [RowConfig(title=r.get("title", ""), signals=r.get("signals", [])) for r in v.get("rows", [])]
-                    mgr.templates[k] = DashboardTemplate(name=k, rows=r_cfgs)
-                mgr.save()
-                status_msg = html.Span("✅ Imported successfully!", style={"color": "green"})
-                out_sel = list(mgr.templates.keys())[0] if mgr.templates else None
-                new_rows = mgr.templates.get(out_sel, DashboardTemplate("", [])).rows if out_sel else []
-
-            # Handle Initialize / Normal View Switch
             elif trig == "init" or trig == "tpl-dropdown":
                 tpl = mgr.templates.get(sel_tpl)
                 if tpl:
                     new_rows = tpl.rows
+                    new_spatials = tpl.spatial_layers
                 out_sel = sel_tpl
 
-            # Handle Visual Add Row
             elif trig == "btn-add-row":
-                new_rows.append(RowConfig(title="New Row", signals=["# Enter signal here"]))
+                new_rows.append(RowConfig(title="New Row", signals=["# signal"]))
 
-            # Handle Visual Delete Row
-            elif isinstance(trig, dict) and trig.get("type") == "btn-rem":
+            elif trig == "btn-add-spatial":
+                new_spatials.append(SpatialLayerConfig("New Layer", "track", "", "", "", "", "lines", "blue"))
+
+            elif isinstance(trig, dict) and trig.get("type") == "btn-rem-row":
                 idx = trig.get("index")
-                if 0 <= idx < len(new_rows):
-                    new_rows.pop(idx)
+                if 0 <= idx < len(new_rows): new_rows.pop(idx)
 
-            # Handle Toolbar Save
-            elif trig == "btn-save":
-                # Save just uses current_rows with current template name (overwrites it)
-                if active_tpl:
-                    mgr.templates[active_tpl] = DashboardTemplate(active_tpl, current_rows)
-                    mgr.save()
-                    status_msg = html.Span(f"✅ Saved '{active_tpl}'", style={"color": "green"})
+            elif isinstance(trig, dict) and trig.get("type") == "btn-rem-spatial":
+                idx = trig.get("index")
+                if 0 <= idx < len(new_spatials): new_spatials.pop(idx)
 
-            # Handle Toolbar Delete
-            elif trig == "btn-delete":
-                if active_tpl in mgr.templates:
-                    del mgr.templates[active_tpl]
-                    mgr.save()
-                    out_sel = list(mgr.templates.keys())[0] if mgr.templates else None
-                    if out_sel:
-                        new_rows = mgr.templates[out_sel].rows
-                        status_msg = html.Span(f"✅ Deleted '{active_tpl}'", style={"color": "green"})
-                    else:
-                        new_rows = [RowConfig("Empty", [])]
+            elif trig == "btn-save" and active_tpl:
+                mgr.templates[active_tpl] = DashboardTemplate(active_tpl, current_rows, spatial_layers=current_spatials)
+                mgr.save()
+                status_msg = html.Span(f"✅ Saved '{active_tpl}'", style={"color": "green"})
 
         except Exception as e:
             status_msg = html.Span(f"❌ Error: {str(e)}", style={"color": "red"})
 
-        # Build Visual Controls
-        children = []
+        # Build Visual Controls for Rows
+        r_children = []
         for i, r in enumerate(new_rows):
-            chunk = html.Div(
-                [
-                    html.Div(
-                        [
-                            dcc.Input(type="text", value=r.title, id={"type": "title-in", "index": i}, placeholder="Chart Title", style={"flex": "1", "marginRight": "5px", "fontWeight": "bold", "border": "1px solid #ddd", "borderRadius": "3px", "padding": "2px 5px", "fontSize": "11px"}),
-                            html.Button("✖", id={"type": "btn-rem", "index": i}, title="Remove Row", style={"color": "#dc3545", "background": "transparent", "border": "none", "cursor": "pointer", "fontSize": "12px"}),
-                        ],
-                        style={"display": "flex", "marginBottom": "5px"}
-                    ),
-                    dcc.Textarea(
-                        value="\n".join(r.signals), id={"type": "signals-in", "index": i},
-                        style={"width": "100%", "height": "40px", "fontFamily": "monospace", "boxSizing": "border-box", "fontSize": "11px", "border": "1px solid #ddd", "borderRadius": "3px"}
-                    ),
-                ],
-                style={"border": "1px solid #ddd", "padding": "8px", "marginBottom": "8px", "background": "white", "borderRadius": "4px"}
-            )
-            children.append(chunk)
+            chunk = html.Div([
+                html.Div([
+                    dcc.Input(type="text", value=r.title, id={"type": "title-in", "index": i}, style={"flex": "1", "marginRight": "5px"}),
+                    html.Button("✖", id={"type": "btn-rem-row", "index": i}, style={"color": "red"})
+                ], style={"display": "flex", "marginBottom": "5px"}),
+                dcc.Textarea(value="\n".join(r.signals), id={"type": "signals-in", "index": i}, style={"width": "100%", "height": "40px"})
+            ], style={"border": "1px solid #ddd", "padding": "5px", "marginBottom": "5px"})
+            r_children.append(chunk)
+
+        # Build Visual Controls for Spatials
+        s_children = []
+        for i, s in enumerate(new_spatials):
+            chunk = html.Div([
+                html.Div([
+                    dcc.Input(type="text", value=s.name, id={"type": "sl-name", "index": i}, placeholder="Layer Name", style={"flex": "1", "marginRight": "5px", "fontWeight":"bold"}),
+                    dcc.RadioItems(options=[{"label": "Track", "value": "track"}, {"label": "Frame", "value": "frame"}], value=s.layer_type, id={"type": "sl-type", "index": i}, style={"marginRight": "5px", "fontSize": "11px", "display": "flex", "alignItems": "center", "gap": "5px"}),
+                    html.Button("✖", id={"type": "btn-rem-spatial", "index": i}, style={"color": "red"})
+                ], style={"display": "flex", "marginBottom": "5px"}),
+                html.Div([
+                    dcc.Input(type="text", value=s.topic, id={"type": "sl-topic", "index": i}, placeholder="Topic (for frame mode)", style={"flex": "1"}),
+                    dcc.Input(type="text", value=s.array_base, id={"type": "sl-base", "index": i}, placeholder="Array Base (e.g. perception_obstacle)", style={"flex": "1"}),
+                ], style={"display": "flex", "gap":"5px", "marginBottom": "5px"}),
+                html.Div([
+                    dcc.Input(type="text", value=s.x_expr, id={"type": "sl-x", "index": i}, placeholder="X Expr", style={"flex": "1"}),
+                    dcc.Input(type="text", value=s.y_expr, id={"type": "sl-y", "index": i}, placeholder="Y Expr", style={"flex": "1"}),
+                ], style={"display": "flex", "gap":"5px", "marginBottom": "5px"}),
+                html.Div([
+                    dcc.RadioItems(options=["lines", "markers", "lines+markers"], value=s.mode, id={"type": "sl-mode", "index": i}, inline=True, style={"flex": "1", "fontSize":"11px"}),
+                    dcc.Input(type="text", value=s.color, id={"type": "sl-color", "index": i}, placeholder="color", style={"flex": "1"}),
+                ], style={"display": "flex", "gap":"5px"}),
+            ], style={"border": "1px solid #007bff", "padding": "5px", "marginBottom": "5px", "background": "#f8f9fc"})
+            s_children.append(chunk)
 
         opts = get_template_options()
-        # Build Raw JSON from Memory state
-        raw_json_str = json.dumps({k: {"name": v.name, "rows": [r.__dict__ for r in v.rows]} for k,v in mgr.templates.items()}, indent=2, ensure_ascii=False)
 
-        return children, opts, out_sel, raw_json_str, status_msg
+        # Raw Dict build
+        state_dict = {}
+        for k, v in mgr.templates.items():
+            state_dict[k] = {
+                "name": v.name,
+                "rows": [r.__dict__ for r in v.rows],
+                "spatial_layers": [s.__dict__ for s in v.spatial_layers]
+            }
+        raw_json_str = json.dumps(state_dict, indent=2, ensure_ascii=False)
 
-    # 6. Global Renderer
+        return r_children, s_children, opts, out_sel, raw_json_str, status_msg
+
+    # Base Render (When Record or Template changes materially)
     @app.callback(
-        [Output("main-graph", "figure"), Output("map-graph", "figure"), Output("main-graph", "style"), Output("graph-container", "style")],
-        [Input("btn-render", "n_clicks"),
-         Input("tpl-dropdown", "value"),
-         Input("record-dropdown", "value"),
-         Input("chart-layout-mode", "value")],
-        [State({"type": "title-in", "index": ALL}, "value"),
-         State({"type": "signals-in", "index": ALL}, "value")],
-         prevent_initial_call=False
+        Output("main-graph", "figure"),
+        Output("map-graph", "figure"),
+        Output("time-slider", "max"),
+        Output("time-slider", "value", allow_duplicate=True),
+        Output("signals-list-container", "children", allow_duplicate=True),
+        Input("btn-render", "n_clicks"),
+        Input("record-dropdown", "value"),
+        State("tpl-dropdown", "value"),
+        State("chart-layout-mode", "value"),
+        prevent_initial_call='initial_duplicate'
     )
-    def render_graph(n_clicks, tpl_change, cb_record_paths, layout_mode, titles, signals):
+    def render_base_graphs(n_clicks, cb_record_paths, active_tpl, layout_mode):
         fig_map = go.Figure()
-        fig_map.update_layout(
-            template="plotly_white",
-            margin=dict(l=10, r=10, t=30, b=10),
-            title="3D / Geo Map Trajectory",
-            dragmode="pan",
-            uirevision="map-user-scale"
-        )
+        fig_map.update_layout(template="plotly_white", margin=dict(l=10, r=10, t=30, b=10), dragmode="pan", uirevision="constant")
 
-        if layout_mode == "fit":
-            main_style = {"width": "100%", "height": fit_chart_height_css, "minHeight": fit_chart_height_css}
-            graph_container_style = {"flex": "1", "display": "flex", "flexDirection": "column", "overflowY": "hidden", "minHeight": "0"}
-        else:
-            scroll_h = max(450, (len(titles or []) or 1) * 280)
-            main_style = {"width": "100%", "height": f"{scroll_h}px", "minHeight": f"{scroll_h}px"}
-            graph_container_style = {"flex": "1", "display": "flex", "flexDirection": "column", "overflowY": "auto", "minHeight": "0"}
+        fig_main = make_subplots(rows=1, cols=1)
+        fig_main.update_layout(template="plotly_white", title="No Data Rows", uirevision="constant")
 
-        if not titles:
-            fig = make_subplots(rows=1, cols=1)
-            fig.update_layout(template="plotly_white", title="No Data Rows")
-            return fig, fig_map, main_style, graph_container_style
+        if not cb_record_paths:
+            return fig_main, fig_map, 100, 0, "No records"
 
-        if isinstance(cb_record_paths, str):
-            record_paths = [cb_record_paths]
-        elif isinstance(cb_record_paths, (list, tuple)):
-            record_paths = list(cb_record_paths)
-        else:
-            record_paths = []
-
-        loaders = []
-        for p in record_paths:
-            loader = get_loader(p)
-            if loader:
-                loaders.append((p, loader))
+        record_paths = [cb_record_paths] if isinstance(cb_record_paths, str) else list(cb_record_paths)
+        loaders = [get_loader(p) for p in record_paths if get_loader(p)]
         if not loaders:
-            fig = make_subplots(rows=1, cols=1)
-            fig.update_layout(template="plotly_white", title="No Data Loaded. Please select a record source.")
-            return fig, fig_map, main_style, graph_container_style
+            return fig_main, fig_map, 100, 0, "No records"
 
-        num_rows = len(titles)
+        # Define MAX time based on primary loader (first track)
+        loader = loaders[0]
+        max_time = 0.0
+        if not loader.master_df.empty:
+            max_time = loader.master_df["relative_time_sec"].max()
 
-        # Compute dynamic row_heights when in 'fit' mode so subplots compress
-        row_heights = None
-        if layout_mode == "fit":
-            # base fraction per row, clamp to avoid invisible rows
-            base = 1.0 / max(1, num_rows)
-            min_frac = 0.06
-            raw = [max(base, min_frac) for _ in range(num_rows)]
-            s = sum(raw)
-            row_heights = [r / s for r in raw]
+        tpl = mgr.templates.get(active_tpl)
+        if not tpl:
+            return fig_main, fig_map, max_time, 0, "No template matched"
 
-        fig = make_subplots(
-            rows=max(1, num_rows),
-            cols=1,
-            shared_xaxes=True,
-            subplot_titles=titles,
-            vertical_spacing=0.035,
-            row_heights=row_heights,
-        )
+        # 1. Render Main Graph (Bottom Time Series)
+        num_rows = len(tpl.rows)
+        if num_rows > 0:
+            fig_main = make_subplots(rows=num_rows, cols=1, shared_xaxes=True, subplot_titles=[r.title for r in tpl.rows], vertical_spacing=0.03)
+            colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
 
-        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
-        dash_styles = ["solid", "dash", "dot", "dashdot"]
-
-        valid_plots = 0
-        for i, (title, sig_block) in enumerate(zip(titles, signals)):
-            row_idx = i + 1
-            sig_list = [
-                x.strip() for x in (sig_block or "").replace(",", "\n").split("\n")
-                if x.strip() and not x.strip().startswith("#")
-            ]
-
-            for loader_idx, (rec_path, loader) in enumerate(loaders):
-                t = loader.master_df["relative_time_sec"].values
-                rec_name = os.path.basename(rec_path)
-                line_dash = dash_styles[loader_idx % len(dash_styles)]
-
-                for trace_idx, expr in enumerate(sig_list):
+            for i, r in enumerate(tpl.rows):
+                for j, expr in enumerate(r.signals):
                     y = loader.evaluate(expr)
+                    t = loader.master_df["relative_time_sec"].values
                     if y is not None and len(y) == len(t):
-                        # Decimate long series for rendering performance
-                        max_points = 4000
-                        t_arr, y_arr = _decimate_series(t, y, max_points=max_points)
+                        t_arr, y_arr = _decimate_series(t, y)
+                        fig_main.add_trace(go.Scatter(x=t_arr, y=y_arr, name=expr, mode='lines', line=dict(color=colors[j % len(colors)])), row=i+1, col=1)
 
-                        valid_y = y_arr[np.isfinite(y_arr)]
-                        unique_vals = np.unique(valid_y) if len(valid_y) > 0 else []
-                        is_step = len(unique_vals) <= 12 and all((v % 1 == 0) for v in unique_vals) if len(unique_vals) > 0 else False
+            fig_main.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikedash="solid", spikecolor="#999")
+            fig_main.update_layout(hovermode="x unified", height=max(450, num_rows * 280), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 
-                        shape = "hv" if is_step else "linear"
-                        c = colors[trace_idx % len(colors)]
-
-                        # Identify A/B testing traces
-                        trace_name = f"{expr} [{rec_name}]" if len(loaders) > 1 else expr
-
-                        # Use WebGL-backed Scatter for very large traces
-                        trace_cls = go.Scattergl if len(t_arr) > 2000 else go.Scatter
-
-                        fig.add_trace(
-                            trace_cls(
-                                x=t_arr, y=y_arr, mode="lines", name=trace_name,
-                                line={"shape": shape, "color": c, "width": 1.5 if loader_idx == 0 else 2.0, "dash": line_dash},
-                                hovertemplate=f"{trace_name}<br>t=%{{x:.3f}}s<br>val=%{{y:.5f}}<extra></extra>",
-                                showlegend=True,
-                            ),
-                            row=row_idx, col=1,
-                        )
-                        valid_plots += 1
-        if valid_plots > 0:
-            fig.update_xaxes(title_text="Relative Time [s]", row=num_rows, col=1)
-            # Sync Cursor Across Subplots (Spikelines)
-            fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikedash="solid", spikecolor="#999")
-            fig.update_layout(hovermode="x unified")
-            fig.update_traces(xaxis="x")
-
-        layout_height = None if layout_mode == "fit" else max(450, num_rows * 280)
-        fig.update_layout(
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-            height=layout_height,
-            autosize=True,
-            margin=dict(l=40, r=40, t=50, b=40)
-        )
-
-        # Map Layout Logic
-        has_map_data = False
-        for loader_idx, (rec_path, loader) in enumerate(loaders):
-            df = loader.master_df
-            x_col, y_col = None, None
-            for c in df.columns:
-                cl = c.lower()
-                if ('position.x' in cl or 'utm_x' in cl or cl.endswith('.x') or cl == 'x') and not x_col: x_col = c
-                if ('position.y' in cl or 'utm_y' in cl or cl.endswith('.y') or cl == 'y') and not y_col: y_col = c
-
-            if x_col and y_col:
-                has_map_data = True
-                # Map traces can also be very long; decimate for performance
-                max_map_points = 6000
-                xs = np.array(df[x_col].tolist())
-                ys = np.array(df[y_col].tolist())
-                custom = np.array(df["relative_time_sec"].tolist()) if "relative_time_sec" in df.columns else None
-                if len(xs) > max_map_points:
-                    idx = np.linspace(0, len(xs) - 1, num=max_map_points, dtype=int)
-                    xs = xs[idx]
-                    ys = ys[idx]
-                    custom = custom[idx] if custom is not None else None
-
-                trace_cls_map = go.Scattergl if len(xs) > 2000 else go.Scatter
-                fig_map.add_trace(trace_cls_map(
-                    x=xs.tolist(), y=ys.tolist(), mode="lines", name=os.path.basename(rec_path),
-                    line=dict(color=colors[loader_idx % len(colors)], width=2.5, dash=dash_styles[loader_idx % len(dash_styles)]),
-                    customdata=custom.tolist() if custom is not None else [],
-                    hovertemplate="x=%{x:.2f}<br>y=%{y:.2f}<br>t=%{customdata:.3f}s<extra></extra>"
+        # 2. Render Map Graph (Tracks only!)
+        for sl_idx, sl in enumerate(tpl.spatial_layers):
+            if sl.layer_type == 'track':
+                x, y = loader.get_spatial_frame(0, sl)  # Track ignores time
+                fig_map.add_trace(go.Scatter(
+                    x=x, y=y, mode=sl.mode, name=sl.name,
+                    line=dict(color=sl.color), marker=dict(color=sl.color, size=4),
+                    hoverinfo='skip'
+                ))
+            elif sl.layer_type == 'frame':
+                # Empty placeholder for frame, to be patched
+                fig_map.add_trace(go.Scatter(
+                    x=[], y=[], mode=sl.mode, name=sl.name,
+                    line=dict(color=sl.color), marker=dict(color=sl.color, size=6)
                 ))
 
-        if has_map_data:
-            fig_map.update_yaxes(scaleanchor="x", scaleratio=1)
-            fig_map.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-            fig_map.update_xaxes(fixedrange=False)
-            fig_map.update_yaxes(fixedrange=False)
+        fig_map.update_yaxes(scaleanchor="x", scaleratio=1)
+        fig_map.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 
-        return fig, fig_map, main_style, graph_container_style
+        # Build signals html
+        sig_list = [html.Li(s, style={"fontSize": "12px", "wordBreak": "break-all"}) for s in loader.available_signals]
+        sig_ui = html.Ul(sig_list, style={"paddingLeft": "15px", "margin": "0"})
+        return fig_main, fig_map, float(max_time), 0, sig_ui
 
-    # 7. Sync Cursor Map to Time (Client-side for performance)
-    app.clientside_callback(
-        """
-        function(hoverData, mapFig) {
-            if (!hoverData || !mapFig || !mapFig.data || !hoverData.points) {
-                return window.dash_clientside.no_update;
-            }
-            const time = hoverData.points[0].x;
 
-            let cursorX = null;
-            let cursorY = null;
 
-            for (let i = 0; i < mapFig.data.length; i++) {
-                let trace = mapFig.data[i];
-                if (!trace.customdata) continue;
+    # --- Pane Layout Switcher --- #
+    @app.callback(
+        Output("main-workspace-content", "style"),
+        Output("map-pane-wrapper", "style"),
+        Output("charts-pane-wrapper", "style"),
+        Input("pane-layout-mode", "value")
+    )
+    def switch_pane_layout(mode):
+        base_main = {"flex": "1", "padding": "0px", "overflow": "hidden", "background": "white", "display": "flex"}
 
-                let minDiff = Infinity;
-                let closestIdx = -1;
-                for (let j = 0; j < trace.customdata.length; j++) {
-                    let t_val = Array.isArray(trace.customdata[j]) ? trace.customdata[j][0] : trace.customdata[j];
-                    let diff = Math.abs(t_val - time);
-                    if (diff < minDiff) {
-                        minDiff = diff;
-                        closestIdx = j;
-                    }
-                }
+        if mode == "horizontal":
+            base_main["flexDirection"] = "row"
+            return base_main, {"flex": "1", "position": "relative", "minWidth": "30%", "borderRight": "2px solid #ccc", "resize": "horizontal", "overflow": "auto"}, {"flex": "1", "display": "flex", "flexDirection": "column", "minWidth": "0"}
+        elif mode == "map-only":
+            base_main["flexDirection"] = "column"
+            return base_main, {"flex": "1", "position": "relative"}, {"display": "none"}
+        elif mode == "charts-only":
+            base_main["flexDirection"] = "column"
+            return base_main, {"display": "none"}, {"flex": "1", "display": "flex", "flexDirection": "column", "minHeight": "0"}
+        else:
+            # vertical default
+            base_main["flexDirection"] = "column"
+            return base_main, {"position": "relative", "flexShrink": "0", "resize": "vertical", "overflow": "auto", "minHeight": "20vh", "height": "45vh"}, {"flex": "1", "display": "flex", "flexDirection": "column", "minHeight": "0"}
 
-                if (closestIdx >= 0 && minDiff < 0.5) {
-                    cursorX = trace.x[closestIdx];
-                    cursorY = trace.y[closestIdx];
-                    break;
-                }
-            }
 
-            if (cursorX !== null && cursorY !== null) {
-                let newFig = JSON.parse(JSON.stringify(mapFig)); // Deep copy to ensure Dash detects update
 
-                // Add Crosshair Lines
-                if (!newFig.layout) newFig.layout = {};
-                newFig.layout.shapes = [
-                    {
-                        type: 'line', xref: 'x', yref: 'paper',
-                        x0: cursorX, x1: cursorX, y0: 0, y1: 1,
-                        line: {color: 'rgba(255,0,0,0.5)', width: 2, dash: 'dot'}
-                    },
-                    {
-                        type: 'line', xref: 'paper', yref: 'y',
-                        x0: 0, x1: 1, y0: cursorY, y1: cursorY,
-                        line: {color: 'rgba(255,0,0,0.5)', width: 2, dash: 'dot'}
-                    }
-                ];
+# --- Playback Logic --- #
+# --- Playback Logic --- #
+    @app.callback(
+        Output("play-interval", "disabled"),
+        Output("btn-play", "children"),
+        Input("btn-play", "n_clicks"),
+        State("play-interval", "disabled")
+    )
+    def toggle_play(n_clicks, disabled):
+        if n_clicks:
+            return not disabled, "⏸ Pause" if disabled else "▶ Play"
+        return True, "▶ Play"
 
-                // Add Tooltip Annotation
-                newFig.layout.annotations = [
-                    {
-                        x: cursorX,
-                        y: cursorY,
-                        xref: 'x',
-                        yref: 'y',
-                        showarrow: true,
-                        arrowhead: 2,
-                        arrowsize: 1,
-                        arrowwidth: 2,
-                        arrowcolor: 'red',
-                        ax: 40,
-                        ay: -40,
-                        text: 'T: ' + time.toFixed(3) + 's<br>X: ' + cursorX.toFixed(2) + '<br>Y: ' + cursorY.toFixed(2),
-                        font: {family: 'monospace', size: 12, color: 'white'},
-                        bgcolor: 'rgba(0, 0, 0, 0.75)',
-                        bordercolor: 'red',
-                        borderwidth: 1,
-                        borderpad: 4,
-                        opacity: 1.0,
-                        align: 'left'
-                    }
-                ];
+    @app.callback(
+        Output("time-slider", "value"),
+        Input("play-interval", "n_intervals"),
+        State("time-slider", "value"),
+        State("time-slider", "max")
+    )
+    def on_tick(n_intervals, current_time, max_t):
+        new_time = current_time + 0.1
+        if new_time > max_t:
+            new_time = 0
+        return round(new_time, 2)
 
-                return newFig;
-            }
-            return window.dash_clientside.no_update;
-        }
-        """,
+    # --- Sync Slider To Store And Render Frames --- #
+    @app.callback(
+        Output("current-time-store", "data"),
         Output("map-graph", "figure", allow_duplicate=True),
-        Input("main-graph", "hoverData"),
+        Output("main-graph", "figure", allow_duplicate=True),
+        Input("time-slider", "value"),
+        State("record-dropdown", "value"),
+        State("tpl-dropdown", "value"),
         State("map-graph", "figure"),
         prevent_initial_call=True
     )
+    def update_dynamic_frames(time_val, cb_record_paths, active_tpl, current_map_fig):
+        if time_val is None: return no_update, no_update, no_update
+
+        # 1. Update Crosshair on Main Graph
+        patched_main = Patch()
+        patched_main["layout"]["shapes"] = [{
+            "type": "line", "xref": "x", "yref": "paper",
+            "x0": time_val, "x1": time_val, "y0": 0, "y1": 1,
+            "line": {"color": "red", "width": 2, "dash": "dash"}
+        }]
+
+        # 2. Update Map Frames
+        record_paths = [cb_record_paths] if isinstance(cb_record_paths, str) else list(cb_record_paths or [])
+        if not record_paths: return time_val, no_update, patched_main
+
+        loader = get_loader(record_paths[0])
+        tpl = mgr.templates.get(active_tpl)
+        if not loader or not tpl: return time_val, no_update, patched_main
+
+        patched_map = Patch()
+        trace_idx = 0
+
+        # We must align with how traces were added in `render_base_graphs`
+        for sl in tpl.spatial_layers:
+            if sl.layer_type == 'frame':
+                x_arr, y_arr = loader.get_spatial_frame(time_val, sl)
+                patched_map["data"][trace_idx]["x"] = x_arr
+                patched_map["data"][trace_idx]["y"] = y_arr
+            trace_idx += 1
+
+        return time_val, patched_map, patched_main
 
     return app
